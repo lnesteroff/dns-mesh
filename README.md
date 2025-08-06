@@ -19,6 +19,9 @@ The solution is designed for challenging network environments (low-bandwidth, hi
 - [4. DNSSEC Forwarding with Knot Resolver](#4-dnssec-forwarding-with-knot-resolver)
 - [5. Monitoring & Troubleshooting](#5-monitoring--troubleshooting)
 - [6. Future Improvements](#6-future-improvements)
+- [7. Architectural Recommendations](#7-architectural-recommendations)
+  - [Resiliency Enhancements](#resiliency-enhancements)
+  - [Security Enhancements](#security-enhancements)
 
 ---
 
@@ -183,3 +186,51 @@ The `07-knot-resolver.yaml` manifest deploys an optional DNSSEC-validating recur
 **Advanced Monitoring and Alerting**: Integrate with a monitoring stack like Prometheus and Grafana. Knot DNS can expose a rich set of metrics that can be used to build dashboards and configure alerts.
 
 **GitOps for Zone Management**: Store zone files in a dedicated Git repository. A CI/CD pipeline could automatically validate and apply changes to the appropriate primary server, providing a full audit trail.
+
+---
+
+## 7. Architectural Recommendations
+The following recommendations are for enhancing the architecture for a production-grade environment, focusing on resiliency and security.
+
+### Resiliency Enhancements
+
+**1. Automated Failover for the Catalog Primary**
+- **Challenge**: If the Catalog Primary site fails, no new zones can be added or removed from the mesh until it is manually restored.
+- **Recommendation**: Implement a **Kubernetes Operator** or a control-loop script that watches the primary catalog pod. If it becomes unhealthy, the operator could automatically promote a secondary site to the primary role by updating its ConfigMap and restarting the pod. This is an advanced task but provides true high availability for management operations.
+
+**2. Dynamic Service Discovery**
+- **Challenge**: The IP addresses of remote sites are hardcoded in the configuration files, making the system brittle if IPs change.
+- **Recommendation**: Use **ExternalDNS** to automatically publish the IP of each site's `knot-lb` service to a real DNS zone. The `remote` addresses in the Knot configurations can then be changed from hardcoded IPs to stable DNS names (e.g., `knot.site-a.example.com`), making the mesh resilient to IP changes.
+
+**3. Stateful Backups and Disaster Recovery**
+- **Challenge**: Zone data and DNSSEC keys on `PersistentVolumes` are not protected from data corruption, accidental deletion, or storage backend failures.
+- **Recommendation**: Create a Kubernetes `CronJob` to perform regular backups. The job can use `kubectl exec` to run `knotc zone-backup` and push the encrypted backups to an off-site object storage location (like AWS S3, Google Cloud Storage, or MinIO). For full cluster recovery, consider a tool like **Velero**.
+
+### Security Enhancements
+
+**1. Kubernetes Network Policies**
+- **Challenge**: By default, any pod in the cluster may be able to communicate with the Knot DNS pods.
+- **Recommendation**: Implement strict `NetworkPolicy` resources to lock down traffic.
+  - **Ingress**: Only allow incoming traffic on ports 53 and 853 from the known IP addresses of the other DNS sites in the mesh.
+  - **Egress**: Only allow the Knot pods to make outbound connections to other mesh sites on port 853.
+
+**2. Automated Certificate and Key Management**
+- **Challenge**: The initial setup uses a manually generated self-signed TLS certificate and a static TSIG key. These should be rotated in a production environment.
+- **Recommendation**:
+  - **Certificates**: Use **cert-manager** to automatically issue and renew TLS certificates from a trusted authority like Let's Encrypt or an internal CA (e.g., HashiCorp Vault).
+  - **Secrets**: For the highest level of security, integrate with a dedicated secrets management system like **HashiCorp Vault** or **AWS Secrets Manager**. These tools can dynamically generate and rotate TSIG keys, which are then fetched by the Knot pods at startup.
+
+**3. Principle of Least Privilege**
+- **Challenge**: The Knot container runs as the `root` user by default.
+- **Recommendation**: Use a `PodSecurityContext` in the `StatefulSet` to run the Knot process as a non-root user. This significantly reduces the container's attack surface and limits the potential damage if it is compromised.
+  ```yaml
+  spec:
+    template:
+      spec:
+        securityContext:
+          runAsUser: 1000
+          runAsGroup: 1000
+          fsGroup: 1000
+        containers:
+        ...
+  ```
