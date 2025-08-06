@@ -26,18 +26,18 @@ data:
         algorithm: hmac-sha256
         secret-file: /etc/knot/tsig/tsig-secret
 
-    # Add all sites in the mesh here for communication.
+    # Add all sites in the mesh here for communication using their public DNS names.
     remote:
       - id: catalog-primary-remote
-        address: 10.1.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        address: site-primary.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
         key: xfr-key
         quic: on
       - id: catalog-secondary-remote
-        address: 10.2.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        address: site-secondary.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
         key: xfr-key
         quic: on
       - id: standard-1-remote
-        address: 10.3.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        address: site-standard-1.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
         key: xfr-key
         quic: on
 

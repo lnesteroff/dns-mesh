@@ -27,17 +27,18 @@ spec:
 # A LoadBalancer service exposes the DNS ports to the other sites over the WAN.
 # On cloud providers, this will provision an external IP. In on-premise
 # environments, this may require a solution like MetalLB.
-# A NodePort service can be used as an alternative if an external LB is not available.
+# The annotation below is critical for service discovery. It tells the
+# ExternalDNS controller to create a public DNS record for this service.
 apiVersion: v1
 kind: Service
 metadata:
   name: knot-lb
   namespace: dns-system
+  annotations:
+    # !!! CHANGE THIS hostname to a unique FQDN for each site !!!
+    external-dns.alpha.kubernetes.io/hostname: site.dns.internal.
 spec:
   type: LoadBalancer
-  # The externalIPs field can be used to assign the known static IP of the node.
-  # externalIPs:
-  # - 10.1.0.10 # Example for Site A
   ports:
     - port: 53
       targetPort: 53

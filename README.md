@@ -1,12 +1,13 @@
-# Multi-Site DNS Mesh
+# Dynamic Multi-Site DNS Mesh
 
-This repository contains templates and documentation for deploying a resilient, automated, multi-site authoritative DNS architecture using Knot DNS on Kubernetes.
+This repository contains templates and documentation for deploying a resilient, automated, multi-site authoritative DNS architecture using Knot DNS and Kubernetes.
 
-The solution is designed for challenging network environments (low-bandwidth, high-latency, air-gapped) and prioritises resilience, automation, and security. By using a role-based approach (`catalog-primary`, `catalog-secondary`, `standard`), the provided files act as generic templates that can be adapted for any number of sites.
+This solution uses **dynamic service discovery**, where each site's IP address is automatically published to a central DNS zone. This removes the need for static IP configurations, making the mesh highly resilient and simplifying operational procedures like adding new sites.
 
 ## Table of Contents
 
 - [Architecture Overview](#architecture-overview)
+  - [Dynamic Service Discovery](#dynamic-service-discovery)
   - [Site Roles](#site-roles)
 - [Prerequisites](#prerequisites)
 - [1. One-Time Setup](#1-one-time-setup)
@@ -14,14 +15,9 @@ The solution is designed for challenging network environments (low-bandwidth, hi
   - [Step 1: Prepare Configuration Files](#step-1-prepare-configuration-files)
   - [Step 2: Deploy Each Site](#step-2-deploy-each-site)
 - [3. Operational Procedures](#3-operational-procedures)
-  - [Onboarding a New Site](#onboarding-a-new-site)
+  - [Onboarding a New Site (Simplified)](#onboarding-a-new-site-simplified)
   - [Day-to-Day Zone Management](#day-to-day-zone-management)
-- [4. DNSSEC Forwarding with Knot Resolver](#4-dnssec-forwarding-with-knot-resolver)
-- [5. Monitoring & Troubleshooting](#5-monitoring--troubleshooting)
-- [6. Future Improvements](#6-future-improvements)
-- [7. Architectural Recommendations](#7-architectural-recommendations)
-  - [Resiliency Enhancements](#resiliency-enhancements)
-  - [Security Enhancements](#security-enhancements)
+- [4. Architectural Recommendations](#4-architectural-recommendations)
 
 ---
 
@@ -29,37 +25,36 @@ The solution is designed for challenging network environments (low-bandwidth, hi
 
 This architecture implements a **multi-primary DNS mesh**. Each site is the primary authority for its own zone and a secondary for all other zones. This provides extremely high read availability.
 
-**Key Technologies:**
-- **Knot DNS**: A high-performance authoritative DNS server.
-- **Zone Transfers over QUIC (XoQ)**: Ensures reliable and encrypted zone synchronisation.
-- **Catalog Zones**: Provides a declarative, automated way to manage the fleet of zones.
-- **DNSSEC**: Secures zones against spoofing and manipulation.
-- **Kubernetes StatefulSets**: Manages the Knot DNS pods with stable network identity and storage.
+### Dynamic Service Discovery
+This project's key feature is its use of dynamic service discovery to eliminate static IP dependencies.
+- **ExternalDNS**: A Kubernetes controller that watches `Service` objects and automatically creates DNS records in a central, resolvable DNS zone.
+- **Knot DNS Remotes**: The `remote` blocks in the Knot configurations use stable, fully qualified domain names (FQDNs) instead of IP addresses.
+- **Catalog Zones**: Provides a declarative, automated way to manage the list of zones in the mesh.
+
+This combination means that adding a new site only requires updating the catalog; the rest of the mesh discovers the new peer automatically via DNS.
 
 ### Site Roles
-This project uses three distinct roles for DNS sites:
-1.  **Catalog Primary**: The main server responsible for generating the catalog of all zones in the mesh. There should be only **one** of these.
-2.  **Catalog Secondary**: A hot standby for the catalog primary. It maintains a copy of the catalog and can be promoted if the primary fails. There should be at least **one** of these.
-3.  **Standard**: A consumer of the catalog. These sites are primary only for their own local zone and secondary for all others.
+1.  **Catalog Primary**: The main server responsible for generating the catalog of all zones.
+2.  **Catalog Secondary**: A hot standby for the catalog primary.
+3.  **Standard**: A consumer of the catalog, primary only for its own local zone.
 
 ---
 
 ## Prerequisites
 - A functional Kubernetes cluster at each site.
+- A **resolvable DNS zone** that you can manage (e.g., on AWS Route 53, Google Cloud DNS, or another internal DNS server).
+- **ExternalDNS** deployed in each cluster and configured to manage your DNS zone.
 - `kubectl` configured with access to each site's cluster.
 - A `StorageClass` that supports dynamic provisioning of `PersistentVolumes`.
-- The following utilities installed locally:
-  - `openssl`
-  - `docker` (to run `keymgr` from the official Knot image)
+- `openssl` and `docker` installed locally.
 
 ---
 
 ## 1. One-Time Setup
 
 **Generate Global Assets:**
-The `00-one-time-setup.sh` script automates the creation of assets that must be shared across all sites: a **TSIG key** for authentication and a **TLS certificate** for encryption.
+Run the `00-one-time-setup.sh` script to generate a shared **TSIG key** and a **TLS certificate**.
 ```bash
-# The script requires Docker to be running
 ./00-one-time-setup.sh
 ```
 This creates a `02-secrets.yaml` file containing the necessary Kubernetes secrets.
@@ -70,32 +65,31 @@ This creates a `02-secrets.yaml` file containing the necessary Kubernetes secret
 
 ### Step 1: Prepare Configuration Files
 
-Before deploying, you must customize the configuration files for your environment.
+1.  **Configure Service Hostnames (`06-knot-services.yaml`)**:
+    For each site, edit the `knot-lb` service and change the `external-dns.alpha.kubernetes.io/hostname` annotation to a unique FQDN within your resolvable zone.
+    - **Example for Primary Catalog Site**: `site-primary.dns.internal`
+    - **Example for a Standard Site**: `site-standard-1.dns.internal`
 
-1.  **Update Remote IPs**:
-    In all three `03-knot-config-*.yaml` files, find the `remote:` section and replace the placeholder IP addresses (`10.x.0.10`) with the actual external IP addresses of your sites. Ensure the `id` for each remote is unique and descriptive.
+2.  **Configure Knot Remotes (`03-knot-config-*.yaml` files)**:
+    In all three `03-knot-config-*.yaml` files, edit the `remote` blocks to match the FQDNs you defined in the previous step. The `id` and `address` must be consistent across all files for all sites in the mesh.
 
-2.  **Update Primary Domains**:
-    In each `03-knot-config-*.yaml` file, find the `zone:` section and change the example domain (`catalog-primary.internal.dns`, etc.) to the real domain name for that site role.
+3.  **Configure Local Domains (`03-knot-config-*.yaml` files)**:
+    In each of the three template files, find the `zone:` section and ensure the `domain` name matches the role (e.g., `catalog-primary.internal.dns` in the primary config).
 
-3.  **Update Catalog Zone**:
-    In `04-catalog-zone-configmap.yaml`, update the list of member zones. You must replace the example PTR records with entries for every zone in your mesh. Remember to update the SOA record and generate the correct hashes for your zone names.
+4.  **Update Catalog Zone (`04-catalog-zone-configmap.yaml`)**:
+    Edit the catalog to list the primary domain for every site in your mesh. Ensure the SOA record and PTR records are correct.
 
 ### Step 2: Deploy Each Site
 
-For each site in your mesh, follow these instructions:
+For each site in your mesh:
 
-1.  **Choose the Right ConfigMap**:
-    Select **one** of the `03-knot-config-*.yaml` files that matches the site's role (e.g., `03-knot-config-cat-primary.yaml` for your main catalog server).
-
-2.  **Apply Namespace and Secrets**:
+1.  **Apply Namespace and Secrets**:
     ```bash
-    # Set your kubectl context to the target site's cluster
     kubectl apply -f 01-namespace.yaml
     kubectl apply -f 02-secrets.yaml
     ```
 
-3.  **Apply the Role-Specific ConfigMap**:
+2.  **Choose and Apply the Role-Specific ConfigMap**:
     ```bash
     # For the Catalog Primary site (and ONLY this site), also apply the catalog zone.
     kubectl apply -f 04-catalog-zone-configmap.yaml
@@ -104,133 +98,59 @@ For each site in your mesh, follow these instructions:
     kubectl apply -f 03-knot-config-cat-primary.yaml # Or -cat-secondary, or -std
     ```
 
-4.  **Deploy Knot**:
+3.  **Deploy Knot Service and StatefulSet**:
     ```bash
-    # These files are the same for all sites.
-    kubectl apply -f 05-knot-statefulset.yaml
+    # The service file now contains your site's unique hostname annotation.
     kubectl apply -f 06-knot-services.yaml
+    kubectl apply -f 05-knot-statefulset.yaml
     ```
+    At this point, ExternalDNS will see the service annotation and create the DNS record.
 
-5.  **Upload Zone File and Initialise**:
-    - Upload the site's primary zone file to the new pod (e.g., `my-site.internal.dns.zone`).
-      ```bash
-      # Replace with your actual zone file and pod name
-      kubectl cp my-site.internal.dns.zone knot-0:/var/lib/knot/zones/ -n dns-system
-      ```
+4.  **Upload Zone File and Initialise**:
+    - Upload the site's primary zone file (e.g., `my-site.internal.dns.zone`).
     - Exec into the pod to generate DNSSEC keys, sign the zone, and reload Knot.
       ```bash
       kubectl exec -it knot-0 -n dns-system -- bash
-      
-      # Inside the pod (replace with your actual domain)
-      knotc zone-key-generate my-site.internal.dns ksk+zsk
-      knotc zone-sign my-site.internal.dns
-      exit
-
-      # Reload knot to apply changes
+      knotc zone-key-generate my-site.internal.dns ksk+zsk && knotc zone-sign my-site.internal.dns && exit
       kubectl exec -it knot-0 -n dns-system -- knotc reload
       ```
-
-Repeat this process for every site, ensuring you use the correct configuration file for each role.
 
 ---
 
 ## 3. Operational Procedures
 
-**Onboarding a New Site**
-1. **Update All Configurations**: Add a new `remote:` block for the new site to all three `03-knot-config-*.yaml` files and add the new remote to the `acl` and `template` lists.
-2. **Update Catalog Zone**: Edit `04-catalog-zone-configmap.yaml` to add the new site's zone to the catalog. Increment the SOA serial.
-3. **Apply Changes**: Roll out the updated `ConfigMap` files to all existing sites and restart the `knot` StatefulSet.
-4. **Deploy New Site**: Follow the process in "Deploy Each Site" to launch the new standard site.
+### Onboarding a New Site (Simplified)
 
-**Day-to-Day Zone Management**
-To edit a record, connect to the primary server for that zone and use a `knotc` transaction.
-```bash
-# Exec into the pod on the zone's primary site
-kubectl exec -it knot-0 -n dns-system -- bash
+With the dynamic architecture, adding a new site is dramatically simpler.
 
-# Use a transaction to safely edit the zone
-knotc zone-begin <zone.name>
-knotc zone-set <zone.name> <record> <ttl> <type> <value>
-knotc zone-commit <zone.name>
-exit
-```
+1.  **Deploy the New Site**:
+    - Follow the "Deploy Each Site" process for the new site.
+    - Ensure you have created a unique FQDN for it in its copy of `06-knot-services.yaml` and added its remote entry to your `03-knot-config-*.yaml` templates before you begin.
 
----
+2.  **Update the Catalog Zone**:
+    - Edit **only one file**: `04-catalog-zone-configmap.yaml`.
+    - Add the new site's primary zone (e.g., `standard-2.internal.dns`) to the PTR record list.
+    - Increment the SOA serial number.
 
-## 4. DNSSEC Forwarding with Knot Resolver
-The `07-knot-resolver.yaml` manifest deploys an optional DNSSEC-validating recursive resolver. This is useful for securely forwarding queries to another organisation's DNS.
+3.  **Apply the Catalog Update**:
+    - Apply the updated `ConfigMap` to the **primary catalog site only**.
+      ```bash
+      # Set context to the primary catalog site's cluster
+      kubectl apply -f 04-catalog-zone-configmap.yaml
+      kubectl exec -it knot-0 -n dns-system -- knotc zone-reload catalog.internal.dns
+      ```
+The mesh will now automatically discover and begin syncing with the new site.
 
----
-
-## 5. Monitoring & Troubleshooting
-- **Check Pod Logs**: `kubectl logs -f statefulset/knot -n dns-system`
-- **Check Zone Status**: `knotc zone-status <zone-name>` (inside the pod)
-- **Check Remotes**: `knotc -c /etc/knot/knot.conf remote-check`
-- **Manual Transfer Test**: Use `kdig` to test XoQ directly.
-  ```bash
-  # The TSIG secret can be found in the auto-generated '02-secrets.yaml'
-  # or by decoding the Kubernetes secret:
-  # kubectl get secret knot-tsig-secret -n dns-system -o jsonpath='{.data.tsig-secret}' | base64 -d
-  kdig +quic @<REMOTE_IP> -p 853 \
-       -y <key-name>:"<YOUR_TSIG_SECRET_HERE>" \
-       <zone.name> AXFR
-  ```
+### Day-to-Day Zone Management
+This remains the same. Connect to a zone's primary server via `kubectl exec` and use `knotc` to manage records.
 
 ---
 
-## 6. Future Improvements
-**Configuration Management with Helm/Kustomize**: Adopt a tool like Kustomize or Helm to template the configurations. This would centralize the list of remotes and make adding/removing sites much simpler.
+## 4. Architectural Recommendations
+With dynamic service discovery implemented, consider these next steps for a production-grade environment:
 
-**Automation of Operational Tasks**: Develop automation scripts (e.g., Bash, Python) to streamline tasks like site onboarding.
-
-**Advanced Monitoring and Alerting**: Integrate with a monitoring stack like Prometheus and Grafana. Knot DNS can expose a rich set of metrics that can be used to build dashboards and configure alerts.
-
-**GitOps for Zone Management**: Store zone files in a dedicated Git repository. A CI/CD pipeline could automatically validate and apply changes to the appropriate primary server, providing a full audit trail.
-
----
-
-## 7. Architectural Recommendations
-The following recommendations are for enhancing the architecture for a production-grade environment, focusing on resiliency and security.
-
-### Resiliency Enhancements
-
-**1. Automated Failover for the Catalog Primary**
-- **Challenge**: If the Catalog Primary site fails, no new zones can be added or removed from the mesh until it is manually restored.
-- **Recommendation**: Implement a **Kubernetes Operator** or a control-loop script that watches the primary catalog pod. If it becomes unhealthy, the operator could automatically promote a secondary site to the primary role by updating its ConfigMap and restarting the pod. This is an advanced task but provides true high availability for management operations.
-
-**2. Dynamic Service Discovery**
-- **Challenge**: The IP addresses of remote sites are hardcoded in the configuration files, making the system brittle if IPs change.
-- **Recommendation**: Use **ExternalDNS** to automatically publish the IP of each site's `knot-lb` service to a real DNS zone. The `remote` addresses in the Knot configurations can then be changed from hardcoded IPs to stable DNS names (e.g., `knot.site-a.example.com`), making the mesh resilient to IP changes.
-
-**3. Stateful Backups and Disaster Recovery**
-- **Challenge**: Zone data and DNSSEC keys on `PersistentVolumes` are not protected from data corruption, accidental deletion, or storage backend failures.
-- **Recommendation**: Create a Kubernetes `CronJob` to perform regular backups. The job can use `kubectl exec` to run `knotc zone-backup` and push the encrypted backups to an off-site object storage location (like AWS S3, Google Cloud Storage, or MinIO). For full cluster recovery, consider a tool like **Velero**.
-
-### Security Enhancements
-
-**1. Kubernetes Network Policies**
-- **Challenge**: By default, any pod in the cluster may be able to communicate with the Knot DNS pods.
-- **Recommendation**: Implement strict `NetworkPolicy` resources to lock down traffic.
-  - **Ingress**: Only allow incoming traffic on ports 53 and 853 from the known IP addresses of the other DNS sites in the mesh.
-  - **Egress**: Only allow the Knot pods to make outbound connections to other mesh sites on port 853.
-
-**2. Automated Certificate and Key Management**
-- **Challenge**: The initial setup uses a manually generated self-signed TLS certificate and a static TSIG key. These should be rotated in a production environment.
-- **Recommendation**:
-  - **Certificates**: Use **cert-manager** to automatically issue and renew TLS certificates from a trusted authority like Let's Encrypt or an internal CA (e.g., HashiCorp Vault).
-  - **Secrets**: For the highest level of security, integrate with a dedicated secrets management system like **HashiCorp Vault** or **AWS Secrets Manager**. These tools can dynamically generate and rotate TSIG keys, which are then fetched by the Knot pods at startup.
-
-**3. Principle of Least Privilege**
-- **Challenge**: The Knot container runs as the `root` user by default.
-- **Recommendation**: Use a `PodSecurityContext` in the `StatefulSet` to run the Knot process as a non-root user. This significantly reduces the container's attack surface and limits the potential damage if it is compromised.
-  ```yaml
-  spec:
-    template:
-      spec:
-        securityContext:
-          runAsUser: 1000
-          runAsGroup: 1000
-          fsGroup: 1000
-        containers:
-        ...
-  ```
+- **Automated Certificate Management**: Use **cert-manager** to automatically issue and renew the TLS certificates used for QUIC, replacing the one-time manual generation.
+- **Stateful Backups**: Implement a Kubernetes `CronJob` to regularly back up zone data and DNSSEC keys to off-site object storage.
+- **Network Policies**: Use `NetworkPolicy` resources to strictly control which pods can communicate with the Knot DNS servers.
+- **Secrets Management**: For maximum security, integrate with a system like **HashiCorp Vault** to manage and rotate the TSIG key dynamically.
+- **Configuration Templating**: While much improved, the need to edit three `remote` blocks can be eliminated by using **Helm** or **Kustomize** to generate the configurations from a single list of sites.
