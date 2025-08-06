@@ -1,13 +1,12 @@
-# Dockerfile for the Knot reconciler script
+# Dockerfile for the Knot reconciler script runtime
 FROM python:3.9-slim
 
-WORKDIR /app
-
-# Install dependencies
+# Install Python dependencies
 RUN pip install kubernetes dnspython
 
-# Copy the script into the image
-COPY reconcile.py .
+# Set the working directory
+WORKDIR /app
 
-# Run the script
+# The reconcile.py script will be mounted from a ConfigMap,
+# so we don't copy it here. This image is just the runtime environment.
 CMD ["python", "./reconcile.py"]

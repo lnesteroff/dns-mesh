@@ -1,6 +1,6 @@
 # 04-dns-internal-zone-configmap.yaml
-# This manifest contains the "address book" zone file for the entire mesh.
-# It maps the stable FQDN of each site to its current IP address.
+# This manifest contains the "address book" and "card catalog" zone for the mesh.
+# It maps FQDNs to IPs (A records) and Zone Names to FQDNs (TXT records).
 #!!! THIS SHOULD ONLY BE DEPLOYED TO THE PRIMARY CATALOG SITE !!!
 apiVersion: v1
 kind: ConfigMap
@@ -20,9 +20,14 @@ data:
                                     )
             3600    IN      NS      ns1.catalog-primary.internal.dns.
 
-    ; --- A Records for Each Site in the Mesh ---
-    ; These records map the FQDNs used in the 'remote' blocks of knot.conf
-    ; to the actual external IP addresses of the sites.
+    ; --- A Records for Each Site's FQDN ("Address Book") ---
+    ; These records map the FQDNs to the actual external IP addresses of the sites.
     site-primary            3600    IN      A       192.0.2.1   ; !!! CHANGE THIS to the site's external IP !!!
     site-secondary          3600    IN      A       198.51.100.2; !!! CHANGE THIS to the site's external IP !!!
     site-standard-1         3600    IN      A       203.0.113.3 ; !!! CHANGE THIS to the site's external IP !!!
+
+    ; --- TXT Records Mapping Zone Base Name to Primary Server FQDN ("Card Catalog") ---
+    ; This tells the reconciler which server is the master for which zone.
+    catalog-primary         3600    IN      TXT     "site-primary.dns.internal"
+    catalog-secondary       3600    IN      TXT     "site-secondary.dns.internal"
+    standard-1              3600    IN      TXT     "site-standard-1.dns.internal"

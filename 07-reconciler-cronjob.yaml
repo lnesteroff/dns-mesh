@@ -51,18 +51,10 @@ spec:
           restartPolicy: OnFailure
           containers:
           - name: reconciler
-            # !!! IMPORTANT !!!
-            # You must build the Dockerfile.reconciler and push it to your own
-            # container registry. Then, replace this image name.
+            # This image provides the Python runtime and dependencies.
+            # You must build the Dockerfile.reconciler and push it to a
+            # registry that is accessible from all your sites.
             image: your-registry/knot-reconciler:latest
-            env:
-              # These variables make the reconciler configurable without changing the script.
-              # The catalog zone the script should query.
-              - name: CATALOG_ZONE_NAME
-                value: "catalog.internal.dns"
-              # The internal FQDN of the local Knot pod to query.
-              - name: LOCAL_KNOT_SERVER
-                value: "knot-0.knot-headless.dns-system.svc.cluster.local"
             volumeMounts:
             - name: knot-config-volume
               mountPath: /etc/knot/knot.conf
@@ -74,14 +66,12 @@ spec:
           - name: knot-config-volume
             configMap:
               name: knot-config
-          # We mount the script from a ConfigMap as well, so you don't have to
-          # build a container image just to test or change the script.
           - name: reconciler-script
             configMap:
               name: knot-reconciler-script
 ---
 # Create a ConfigMap to hold the reconciler script itself.
-# This allows you to update the script without rebuilding the container image.
+# This allows you to update the script's logic without rebuilding the container image.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -99,13 +89,29 @@ data:
     from kubernetes.client.rest import ApiException
 
     # --- Configuration ---
-    # Read from environment variables with sensible defaults.
     NAMESPACE = "dns-system"
     CONFIGMAP_NAME = "knot-config"
     STATEFULSET_NAME = "knot"
-    CATALOG_ZONE_NAME = os.environ.get("CATALOG_ZONE_NAME", "catalog.internal.dns")
-    LOCAL_KNOT_SERVER = os.environ.get("LOCAL_KNOT_SERVER", "knot-0.knot-headless.dns-system.svc.cluster.local")
+    CATALOG_ZONE_NAME = "catalog.internal.dns"
+    ADDRESS_BOOK_ZONE_NAME = "dns.internal"
     KNOT_CONFIG_PATH = "/etc/knot/knot.conf"
+    LOCAL_KNOT_SERVER = "127.0.0.1" # Query the local Knot instance
+
+    def get_fqdn_from_address_book(base_name):
+        """
+        Queries the local server for a TXT record in the address book zone
+        to find the FQDN of the primary server for a given zone base name.
+        """
+        try:
+            query_name = f"{base_name}.{ADDRESS_BOOK_ZONE_NAME}"
+            resolver = dns.resolver.Resolver()
+            resolver.nameservers = [LOCAL_KNOT_SERVER]
+            answer = resolver.resolve(query_name, 'TXT')
+            # TXT records are quoted, so we strip the quotes.
+            return answer[0].to_text().strip('"')
+        except Exception as e:
+            print(f"Could not resolve TXT record for {query_name}: {e}")
+            return None
 
     def get_desired_remotes_from_catalog():
         print(f"Attempting AXFR of {CATALOG_ZONE_NAME} from {LOCAL_KNOT_SERVER}...")
@@ -122,8 +128,14 @@ data:
                             zone_name = str(item).rstrip('.')
                             base_name = zone_name.split('.')[0]
                             remote_id = f"{base_name}-remote"
-                            fqdn = f"site-{base_name}.dns.internal"
-                            desired_remotes[remote_id] = fqdn
+                            
+                            # Discover the FQDN from the address book zone
+                            fqdn = get_fqdn_from_address_book(base_name)
+                            if fqdn:
+                                desired_remotes[remote_id] = fqdn
+                            else:
+                                print(f"Warning: Found zone '{zone_name}' in catalog but could not find its FQDN in the address book.")
+
             print(f"Found desired remotes in catalog: {list(desired_remotes.keys())}")
             return desired_remotes
         except Exception as e:
@@ -151,7 +163,6 @@ data:
         with open(KNOT_CONFIG_PATH, 'r') as f:
             config_str = f.read()
         
-        # Use regex to find the end of the remote section to insert new blocks
         remote_insertion_point = re.search(r'(remote:.*?)(\n\S|$)', config_str, re.DOTALL).end(1)
         
         new_blocks = ""
@@ -199,7 +210,7 @@ data:
             return
 
         print(f"Configuration is stale. Missing remotes: {list(missing_remotes_ids)}")
-        remotes_to_add = {{k: v for k, v in desired_remotes.items() if k in missing_remotes_ids}}
+        remotes_to_add = {k: v for k, v in desired_remotes.items() if k in missing_remotes_ids}
         new_knot_conf = generate_new_config(remotes_to_add)
 
         try:
@@ -218,7 +229,7 @@ data:
 
         try:
             print(f"Triggering rolling restart of StatefulSet '{STATEFULSET_NAME}'...")
-            patch = {{"spec": {{"template": {{"metadata": {{"annotations": {{"reconciler/restartedAt": datetime.datetime.utcnow().isoformat()}}}}}}}}}}
+            patch = {"spec": {"template": {"metadata": {"annotations": {"reconciler/restartedAt": datetime.datetime.utcnow().isoformat()}}}}}}
             apps_api.patch_namespaced_stateful_set(name=STATEFULSET_NAME, namespace=NAMESPACE, body=patch)
             print("StatefulSet restart triggered successfully.")
         except ApiException as e:

@@ -26,7 +26,8 @@ data:
         algorithm: hmac-sha256
         secret-file: /etc/knot/tsig/tsig-secret # Mounted from Secret
 
-    # Add all sites in the mesh here for communication using their public DNS names.
+    # This initial block contains the essential bootstrap peers.
+    # The reconciler will automatically discover and add all other sites.
     remote:
       - id: catalog-primary-remote
         address: site-primary.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
@@ -36,17 +37,13 @@ data:
         address: site-secondary.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
         key: xfr-key
         quic: on
-      - id: standard-1-remote
-        address: site-standard-1.dns.internal@853 # !!! CHANGE THIS to the site's FQDN !!!
-        key: xfr-key
-        quic: on
 
     acl:
       - id: transfer-acl
-        remote: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        remote: [catalog-primary-remote, catalog-secondary-remote]
         action: transfer
       - id: notify-acl
-        remote: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        remote: [catalog-primary-remote, catalog-secondary-remote]
         action: notify
 
     policy:
@@ -58,8 +55,8 @@ data:
     template:
       - id: primary-template
         storage: /var/lib/knot/zones/
-        # Notify all OTHER sites.
-        notify: [catalog-primary-remote, standard-1-remote]
+        # The reconciler will automatically add new sites to this list.
+        notify: [catalog-primary-remote]
         acl: [transfer-acl, notify-acl]
         soa-expire: 3628800
         journal-content: all
@@ -67,7 +64,8 @@ data:
         dnssec-policy: default-signing-policy
       - id: secondary-template
         storage: /var/lib/knot/zones/
-        master: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        # The reconciler will automatically add new sites to this list.
+        master: [catalog-primary-remote, catalog-secondary-remote]
         acl: notify-acl
         soa-expire: 3628800
         journal-content: all
