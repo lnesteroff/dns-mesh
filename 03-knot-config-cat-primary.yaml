@@ -1,0 +1,87 @@
+# 03-knot-config-cat-primary.yaml
+# ---
+# CONFIGURATION FOR A PRIMARY CATALOG SITE
+# ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  # This name is REQUIRED. The StatefulSet is configured to look for 'knot-config'.
+  name: knot-config
+  namespace: dns-system
+data:
+  knot.conf: |
+    # /etc/knot/knot.conf - For a Primary Catalog Site
+    server:
+      listen: [ 0.0.0.0@53, '::'@53 ]
+      listen-quic: [ 0.0.0.0@853, '::'@853 ]
+      tls-cert-file: /etc/knot/pki/tls.crt
+      tls-key-file: /etc/knot/pki/tls.key
+
+    log:
+      - target: syslog
+        any: info
+
+    key:
+      - id: xfr-key
+        algorithm: hmac-sha256
+        secret-file: /etc/knot/tsig/tsig-secret
+
+    # Add all sites in the mesh here for communication.
+    remote:
+      - id: catalog-primary-remote
+        address: 10.1.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        key: xfr-key
+        quic: on
+      - id: catalog-secondary-remote
+        address: 10.2.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        key: xfr-key
+        quic: on
+      - id: standard-1-remote
+        address: 10.3.0.10@853 # !!! CHANGE THIS to the site's external IP !!!
+        key: xfr-key
+        quic: on
+
+    acl:
+      - id: transfer-acl
+        remote: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        action: transfer
+      - id: notify-acl
+        remote: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        action: notify
+
+    policy:
+      - id: default-signing-policy
+        algorithm: ecdsap256sha256
+        zsk-lifetime: 2592000 # 30 days
+        ksk-lifetime: 31536000 # 365 days
+
+    template:
+      - id: primary-template
+        storage: /var/lib/knot/zones/
+        # Notify all OTHER sites.
+        notify: [catalog-secondary-remote, standard-1-remote]
+        acl: [transfer-acl, notify-acl]
+        soa-expire: 3628800 # 42 days
+        journal-content: all
+        dnssec-signing: on
+        dnssec-policy: default-signing-policy
+      - id: secondary-template
+        storage: /var/lib/knot/zones/
+        # A secondary will have all other sites as potential masters.
+        master: [catalog-primary-remote, catalog-secondary-remote, standard-1-remote]
+        acl: notify-acl
+        soa-expire: 3628800
+        journal-content: all
+
+    zone:
+      # This site is PRIMARY for its own zone.
+      # !!! CHANGE THIS to your site's unique domain !!!
+      - domain: catalog-primary.internal.dns
+        template: primary-template
+
+      # This site GENERATES the catalog zone.
+      - domain: catalog.internal.dns
+        file: /etc/knot/catalog/catalog.internal.dns.zone
+        catalog-role: generate
+        catalog-template: primary-template
+        acl: transfer-acl # Allow secondaries to pull the catalog

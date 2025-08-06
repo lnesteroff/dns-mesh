@@ -1,0 +1,38 @@
+# 04-catalog-zone-configmap.yaml
+# This manifest contains the catalog zone file itself.
+# It is the single source of truth for which zones exist in the mesh.
+#!!! THIS SHOULD ONLY BE DEPLOYED TO THE PRIMARY CATALOG SITE !!!
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: knot-catalog-zone
+  namespace: dns-system
+data:
+  catalog.internal.dns.zone: |
+    ; Catalog Zone for the internal DNS mesh
+    $ORIGIN catalog.internal.dns.
+    @       3600    IN      SOA     ns1.catalog-primary.internal.dns. admin.catalog-primary.internal.dns. (
+                                    2024080601 ; Serial (YYYYMMDDnn)
+                                    3600       ; Refresh
+                                    600        ; Retry
+                                    3628800    ; Expire (42 days)
+                                    3600       ; Minimum TTL
+                                    )
+            3600    IN      NS      ns1.catalog-primary.internal.dns.
+
+    ; Catalog version declaration is mandatory.
+    version 3600    IN      TXT     "2"
+
+    ; Define the 'zones' subdomain where member zones are listed.
+    zones   3600    IN      NS    .
+
+    ; --- Member Zone Definitions ---
+    ; Each member zone is a PTR record under 'zones'.
+    ; The name of the PTR record is the zone name hashed.
+    ; You must add all zones in the mesh here.
+    ; Example for 'catalog-primary.internal.dns.'
+    m5xw6z3mn5xw6z3mn5xw6z3mn5xw6z3m.zones 3600 IN PTR catalog-primary.internal.dns.
+    ; Example for 'catalog-secondary.internal.dns.'
+    n5xw6z3mn5xw6z3mn5xw6z3mn5xw6z3n.zones 3600 IN PTR catalog-secondary.internal.dns.
+    ; Example for 'standard-1.internal.dns.'
+    o5xw6z3mn5xw6z3mn5xw6z3mn5xw6z3o.zones 3600 IN PTR standard-1.internal.dns.

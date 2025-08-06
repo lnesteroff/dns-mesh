@@ -1,0 +1,7 @@
+# 01-namespace.yaml
+# Creates a dedicated namespace for all our DNS-related resources.
+# Apply this to all sites.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dns-system

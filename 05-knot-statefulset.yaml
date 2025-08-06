@@ -1,0 +1,77 @@
+# 05-knot-statefulset.yaml
+# This StatefulSet manages the Knot DNS pod. It provides stable storage
+# and a stable network identity, which are critical for a stateful
+# service like a DNS server.
+# This manifest is the SAME for all sites.
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: knot
+  namespace: dns-system
+spec:
+  serviceName: "knot-headless"
+  replicas: 1
+  selector:
+    matchLabels:
+      app: knot
+  template:
+    metadata:
+      labels:
+        app: knot
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: knot
+          image: cznic/knot:3.4 # Official Knot DNS image [2]
+          ports:
+            - containerPort: 53
+              name: dns-tcp
+              protocol: TCP
+            - containerPort: 53
+              name: dns-udp
+              protocol: UDP
+            - containerPort: 853
+              name: dns-quic
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/knot/knot.conf
+              subPath: knot.conf
+            - name: tsig-secret
+              mountPath: /etc/knot/tsig
+              readOnly: true
+            - name: tls-secret
+              mountPath: /etc/knot/pki
+              readOnly: true
+            # This volume is only mounted for Site A
+            - name: catalog-zone-file
+              mountPath: /etc/knot/catalog
+              readOnly: true
+            # This is the persistent storage for zone data, journals, and keys.
+            - name: storage
+              mountPath: /var/lib/knot
+      volumes:
+        - name: config
+          configMap:
+            name: knot-config # This name must match the ConfigMap for the specific site
+        - name: tsig-secret
+          secret:
+            secretName: knot-tsig-secret
+        - name: tls-secret
+          secret:
+            secretName: knot-tls-secret
+        # This volume is only mounted for Site A
+        - name: catalog-zone-file
+          configMap:
+            name: knot-catalog-zone
+            optional: true # Make it optional so this manifest works for all sites
+  # This template creates a unique Persistent Volume for the pod, ensuring
+  # that all zone data, journals, and DNSSEC keys are preserved across restarts. [3]
+  volumeClaimTemplates:
+    - metadata:
+        name: storage
+      spec:
+        accessModes:
+        resources:
+          requests:
+            storage: 1Gi # Adjust size as needed

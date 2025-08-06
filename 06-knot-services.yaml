@@ -1,0 +1,55 @@
+# 06-knot-services.yaml
+# Defines the network services for Knot DNS.
+# This manifest is the SAME for all sites.
+
+# A Headless Service is required by the StatefulSet to provide stable
+# network identities (e.g., knot-0.knot-headless.dns-system.svc.cluster.local).
+apiVersion: v1
+kind: Service
+metadata:
+  name: knot-headless
+  namespace: dns-system
+spec:
+  ports:
+    - port: 53
+      name: dns-tcp
+      protocol: TCP
+    - port: 53
+      name: dns-udp
+      protocol: UDP
+    - port: 853
+      name: dns-quic
+      protocol: UDP
+  clusterIP: None
+  selector:
+    app: knot
+---
+# A LoadBalancer service exposes the DNS ports to the other sites over the WAN.
+# On cloud providers, this will provision an external IP. In on-premise
+# environments, this may require a solution like MetalLB.
+# A NodePort service can be used as an alternative if an external LB is not available.
+apiVersion: v1
+kind: Service
+metadata:
+  name: knot-lb
+  namespace: dns-system
+spec:
+  type: LoadBalancer
+  # The externalIPs field can be used to assign the known static IP of the node.
+  # externalIPs:
+  # - 10.1.0.10 # Example for Site A
+  ports:
+    - port: 53
+      targetPort: 53
+      protocol: TCP
+      name: dns-tcp
+    - port: 53
+      targetPort: 53
+      protocol: UDP
+      name: dns-udp
+    - port: 853
+      targetPort: 853
+      protocol: UDP
+      name: dns-quic
+  selector:
+    app: knot

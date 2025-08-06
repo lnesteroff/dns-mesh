@@ -1,0 +1,116 @@
+# 07-knot-resolver.yaml
+# Optional deployment of Knot Resolver for DNSSEC-validating forwarding.
+# This would typically be deployed at one or more central sites.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: knot-resolver-config
+  namespace: dns-system
+data:
+  kresd.conf: |
+    -- /etc/knot-resolver/kresd.conf
+    -- For more info, see: https://knot-resolver.readthedocs.io/
+
+    -- Listen on all interfaces inside the pod for standard DNS
+    net.listen('0.0.0.0')
+    net.listen('::')
+
+    -- Optionally, listen for DNS-over-QUIC queries from clients
+    -- net.listen_quic('0.0.0.0')
+    -- net.listen_quic('::')
+    -- tls.cert('/etc/knot-resolver/pki/tls.crt')
+    -- tls.key('/etc/knot-resolver/pki/tls.key')
+
+    -- Load essential modules
+    modules = {
+        'policy',   -- Advanced query routing
+        'stats',    -- Statistics module
+        'predict'   -- Prefetching to reduce latency
+    }
+
+    -- By default, Knot Resolver performs DNSSEC validation.
+
+    -- To establish a chain of trust with another organization's private
+    -- DNSSEC-signed zone, you would uncomment the following sections.
+    -- This requires securely obtaining their public KSK or DS record.
+
+    -- 1. Create a file containing their public key as a trust anchor.
+    --    This file would be mounted into the container via another ConfigMap.
+    -- trust_anchors.add_file('/etc/knot-resolver/trust-anchors/other-org.key')
+
+    -- 2. Forward queries for their domain to their nameserver for resolution.
+    --    DNSSEC validation is performed automatically on forwarded queries.
+    --    To use DNS-over-QUIC for forwarding, add '+quic' to the address.
+    policy.add(policy.suffix(policy.FORWARD('10.100.0.53+quic'), {todname('other-org.private.')}))
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: knot-resolver
+  namespace: dns-system
+  labels:
+    app: knot-resolver
+spec:
+  replicas: 2 # Run two replicas for redundancy
+  selector:
+    matchLabels:
+      app: knot-resolver
+  template:
+    metadata:
+      labels:
+        app: knot-resolver
+    spec:
+      containers:
+        - name: knot-resolver
+          image: cznic/knot-resolver:latest
+          ports:
+            - containerPort: 53
+              name: dns-udp
+              protocol: UDP
+            - containerPort: 53
+              name: dns-tcp
+              protocol: TCP
+            - containerPort: 853
+              name: dns-quic
+              protocol: UDP
+          volumeMounts:
+            - name: config
+              mountPath: /etc/knot-resolver/kresd.conf
+              subPath: kresd.conf
+          # - name: other-org-trust-anchor
+          #   mountPath: /etc/knot-resolver/trust-anchors/other-org.key
+          #   subPath: other-org.key
+          # - name: resolver-pki
+          #   mountPath: /etc/knot-resolver/pki
+          #   readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: knot-resolver-config
+      # - name: other-org-trust-anchor
+      #   configMap:
+      #     name: other-org-trust-anchor-config
+      # - name: resolver-pki
+      #   secret:
+      #     secretName: knot-resolver-tls-secret
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: knot-resolver-service
+  namespace: dns-system
+spec:
+  type: ClusterIP
+  ports:
+    - port: 53
+      protocol: UDP
+      name: dns-udp
+    - port: 53
+      protocol: TCP
+      name: dns-tcp
+    - port: 853
+      protocol: UDP
+      name: dns-quic
+  selector:
+    app: knot-resolver
