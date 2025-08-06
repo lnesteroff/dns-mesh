@@ -2,7 +2,7 @@
 
 This repository contains templates and documentation for deploying a resilient, automated, and **self-healing** multi-site authoritative DNS architecture using Knot DNS and Kubernetes.
 
-This solution uses a **centralized address book** (`dns.internal` zone) and **catalog zones** for dynamic zone provisioning. A **reconciler CronJob** runs on each site, automatically detecting new peers from the catalog and updating its own configuration. This creates a robust, self-healing system that solves the "stale peer" problem for disconnected sites and makes onboarding a new site a zero-touch operation for existing peers.
+This solution uses a **centralized address book** (`dns.internal` zone) and **catalog zones** for dynamic zone provisioning. A **reconciler CronJob** runs on each site, automatically detecting new peers from its locally synced catalog and updating its own configuration. This creates a robust, self-healing system that is ideal for unreliable networks.
 
 ## Table of Contents
 
@@ -15,7 +15,9 @@ This solution uses a **centralized address book** (`dns.internal` zone) and **ca
 - [3. Operational Procedures](#3-operational-procedures)
   - [Onboarding a New Site (Fully Automated)](#onboarding-a-new-site-fully-automated)
   - [Day-to-Day Zone Management](#day-to-day-zone-management)
-- [4. Architectural Recommendations for Production](#4-architectural-recommendations-for-production)
+- [4. Configuration](#4-configuration)
+  - [Reconciler Configuration](#reconciler-configuration)
+- [5. Architectural Recommendations for Production](#5-architectural-recommendations-for-production)
 
 ---
 
@@ -27,9 +29,9 @@ This solution uses a **centralized address book** (`dns.internal` zone) and **ca
 
 2.  **Dynamic Zone Provisioning (`catalog.internal.dns` zone)**: The Primary Catalog site hosts a catalog that lists all member zones. Other sites consume this catalog to automatically provision themselves as secondaries.
 
-3.  **Automated Peer Reconciliation (CronJob Operator)**: A Kubernetes `CronJob` runs periodically on every site. It compares the list of zones in the catalog with the list of peers in its local `knot.conf`. If a peer is missing (e.g., a new site was added while this one was offline), the reconciler automatically updates its own `ConfigMap` and triggers a restart of its Knot pod to load the new configuration.
+3.  **Automated Peer Reconciliation (CronJob Operator)**: A Kubernetes `CronJob` runs periodically on every site. It performs a **local check** against its own Knot server's copy of the catalog. If it detects that a new zone has been synced but the corresponding peer is missing from its `knot.conf`, the reconciler automatically updates its own `ConfigMap` and triggers a restart of its Knot pod.
 
-This three-part system creates a fully automated mesh where a site that has been offline can reconnect, download the latest address book and catalog, and automatically reconfigure itself to connect to any new peers.
+This three-part system is highly resilient to network partitions. All cross-site communication is handled by Knot's standard and efficient zone transfer mechanism. The reconciler adds no extra network traffic between sites; it only queries its local Knot pod, making it ideal for low-bandwidth or high-latency environments.
 
 ### Site Roles
 - **Catalog Primary**: The main server, primary for both the catalog and the `dns.internal` address book zone.
@@ -111,7 +113,7 @@ Onboarding a new site no longer requires manually updating every existing site.
       kubectl exec -it knot-0 -n dns-system -- knotc zone-reload dns.internal
       kubectl exec -it knot-0 -n dns-system -- knotc zone-reload catalog.internal.dns
       ```
-    **That's it.** Over the next 5 minutes, the reconciler `CronJob` on every existing site will detect the change, automatically add the new peer to its own configuration, and restart itself.
+    **That's it.** Existing sites will automatically sync the new zones. Over the next 5 minutes, the reconciler `CronJob` on each site will detect the change locally, add the new peer to its own configuration, and restart itself.
 
 3.  **Deploy the New Site**:
     - You can now deploy the new site.
@@ -122,7 +124,18 @@ This remains the same. Connect to a zone's primary server via `kubectl exec` and
 
 ---
 
-## 4. Architectural Recommendations for Production
+## 4. Configuration
+
+### Reconciler Configuration
+The behavior of the self-healing reconciler script can be modified without rebuilding its container image by setting environment variables in the `08-reconciler-cronjob.yaml` manifest.
+
+Edit the `env` section of the `CronJob` to change these values:
+- **`CATALOG_ZONE_NAME`**: The FQDN of the catalog zone the script should query. Defaults to `catalog.internal.dns`.
+- **`LOCAL_KNOT_SERVER`**: The internal FQDN of the local Knot pod the script should query. Defaults to `knot-0.knot-headless.dns-system.svc.cluster.local`.
+
+---
+
+## 5. Architectural Recommendations for Production
 - **Configuration Templating**: The final step to full automation is to use **Helm** or **Kustomize**. This would allow you to define the list of sites in a single file and automatically generate all `remote` blocks and the `dns.internal` zone file, eliminating the last manual step in the onboarding process.
 - **Automated Certificate Management**: Use **cert-manager** with a private CA to provide unique, auto-renewing TLS certificates for each site.
 - **Stateful Backups**: Implement a Kubernetes `CronJob` to regularly back up zone data to off-site object storage.

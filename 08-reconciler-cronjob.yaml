@@ -55,15 +55,14 @@ spec:
             # You must build the Dockerfile.reconciler and push it to your own
             # container registry. Then, replace this image name.
             image: your-registry/knot-reconciler:latest
-            # As a fallback for testing without a registry, you can use a
-            # standard python image and install dependencies at runtime,
-            # but this is not recommended for production.
-            # command:
-            # - "/bin/sh"
-            # - "-c"
-            # - |
-            #   pip install kubernetes dnspython
-            #   python /app/reconcile.py
+            env:
+              # These variables make the reconciler configurable without changing the script.
+              # The catalog zone the script should query.
+              - name: CATALOG_ZONE_NAME
+                value: "catalog.internal.dns"
+              # The internal FQDN of the local Knot pod to query.
+              - name: LOCAL_KNOT_SERVER
+                value: "knot-0.knot-headless.dns-system.svc.cluster.local"
             volumeMounts:
             - name: knot-config-volume
               mountPath: /etc/knot/knot.conf
@@ -100,12 +99,13 @@ data:
     from kubernetes.client.rest import ApiException
 
     # --- Configuration ---
+    # Read from environment variables with sensible defaults.
     NAMESPACE = "dns-system"
     CONFIGMAP_NAME = "knot-config"
     STATEFULSET_NAME = "knot"
-    CATALOG_ZONE_NAME = "catalog.internal.dns"
+    CATALOG_ZONE_NAME = os.environ.get("CATALOG_ZONE_NAME", "catalog.internal.dns")
+    LOCAL_KNOT_SERVER = os.environ.get("LOCAL_KNOT_SERVER", "knot-0.knot-headless.dns-system.svc.cluster.local")
     KNOT_CONFIG_PATH = "/etc/knot/knot.conf"
-    LOCAL_KNOT_SERVER = "knot-0.knot-headless.dns-system.svc.cluster.local"
 
     def get_desired_remotes_from_catalog():
         print(f"Attempting AXFR of {CATALOG_ZONE_NAME} from {LOCAL_KNOT_SERVER}...")
@@ -218,7 +218,7 @@ data:
 
         try:
             print(f"Triggering rolling restart of StatefulSet '{STATEFULSET_NAME}'...")
-            patch = {{"spec": {"template": {"metadata": {"annotations": {"reconciler/restartedAt": datetime.datetime.utcnow().isoformat()}}}}}}
+            patch = {{"spec": {{"template": {{"metadata": {{"annotations": {{"reconciler/restartedAt": datetime.datetime.utcnow().isoformat()}}}}}}}}}}
             apps_api.patch_namespaced_stateful_set(name=STATEFULSET_NAME, namespace=NAMESPACE, body=patch)
             print("StatefulSet restart triggered successfully.")
         except ApiException as e:
