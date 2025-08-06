@@ -85,3 +85,9 @@ data:
         catalog-role: generate
         catalog-template: primary-template
         acl: transfer-acl # Allow secondaries to pull the catalog
+
+      # This site is also PRIMARY for the mesh's "address book" zone.
+      - domain: dns.internal
+        file: /etc/knot/zones/dns.internal.zone
+        template: primary-template
+        acl: transfer-acl

@@ -84,3 +84,8 @@ data:
         master: [catalog-primary-remote, catalog-secondary-remote]
         catalog-role: interpret
         catalog-template: secondary-template
+
+      # This site is a SECONDARY for the mesh's "address book" zone.
+      - domain: dns.internal
+        master: catalog-primary-remote
+        template: secondary-template

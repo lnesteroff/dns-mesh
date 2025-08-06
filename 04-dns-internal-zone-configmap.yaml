@@ -1,0 +1,28 @@
+# 04-dns-internal-zone-configmap.yaml
+# This manifest contains the "address book" zone file for the entire mesh.
+# It maps the stable FQDN of each site to its current IP address.
+#!!! THIS SHOULD ONLY BE DEPLOYED TO THE PRIMARY CATALOG SITE !!!
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: knot-dns-internal-zone
+  namespace: dns-system
+data:
+  dns.internal.zone: |
+    ; Address book for the internal DNS mesh
+    $ORIGIN dns.internal.
+    @       3600    IN      SOA     ns1.catalog-primary.internal.dns. admin.catalog-primary.internal.dns. (
+                                    2024080601 ; Serial (YYYYMMDDnn)
+                                    3600       ; Refresh
+                                    600        ; Retry
+                                    3628800    ; Expire (42 days)
+                                    3600       ; Minimum TTL
+                                    )
+            3600    IN      NS      ns1.catalog-primary.internal.dns.
+
+    ; --- A Records for Each Site in the Mesh ---
+    ; These records map the FQDNs used in the 'remote' blocks of knot.conf
+    ; to the actual external IP addresses of the sites.
+    site-primary            3600    IN      A       192.0.2.1   ; !!! CHANGE THIS to the site's external IP !!!
+    site-secondary          3600    IN      A       198.51.100.2; !!! CHANGE THIS to the site's external IP !!!
+    site-standard-1         3600    IN      A       203.0.113.3 ; !!! CHANGE THIS to the site's external IP !!!

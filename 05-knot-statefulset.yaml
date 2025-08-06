@@ -43,9 +43,13 @@ spec:
             - name: tls-secret
               mountPath: /etc/knot/pki
               readOnly: true
-            # This volume is only mounted for Site A
+            # This volume is only mounted for the Primary Catalog site
             - name: catalog-zone-file
               mountPath: /etc/knot/catalog
+              readOnly: true
+            # This volume is only mounted for the Primary Catalog site
+            - name: dns-internal-zone-file
+              mountPath: /etc/knot/zones
               readOnly: true
             # This is the persistent storage for zone data, journals, and keys.
             - name: storage
@@ -60,10 +64,15 @@ spec:
         - name: tls-secret
           secret:
             secretName: knot-tls-secret
-        # This volume is only mounted for Site A
+        # This volume is only mounted for the Primary Catalog site
         - name: catalog-zone-file
           configMap:
             name: knot-catalog-zone
+            optional: true # Make it optional so this manifest works for all sites
+        # This volume is only mounted for the Primary Catalog site
+        - name: dns-internal-zone-file
+          configMap:
+            name: knot-dns-internal-zone
             optional: true # Make it optional so this manifest works for all sites
   # This template creates a unique Persistent Volume for the pod, ensuring
   # that all zone data, journals, and DNSSEC keys are preserved across restarts. [3]
